@@ -1,0 +1,113 @@
+# Coursera Practical Machine Learning Peer Assesment Project
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## Modeling
+
+Firstly, we load and  preprocess the data in order to get consistent data to construct appropriate features for training the different models. Several things were done:
+1. Strings *"NA"*, *"#DIV/0!"* as well as empty strings (*""*) were considered as `NA` values.
+2. Convert empty strings to `NA` values.
+
+```{r load_data, echo=FALSE,results='hide',message=FALSE}
+setwd("~/Documentos/Cursos/Data Science Path/08_Practical Machine Learning/peerAssesment")
+
+library(ggplot2)
+library(caret,quietly=TRUE)
+library(knitr)
+library(randomForest,quietly=TRUE)
+library(rpart,quietly=TRUE)
+library(doMC, quietly=TRUE)
+library(rattle,quietly=TRUE)
+
+registerDoMC(cores = 4)
+data <- read.csv("pml-training.csv",na.strings=c("#DIV/0!", "","NA"))
+testData <- read.csv("pml-testing.csv",na.strings=c("#DIV/0!", "","NA"))
+```
+
+Once we had a clear dataset, we have a dataset with 160 variables. Among those variables, some of them can be ruled out, so we study which of those can be removed. Taking into account that a model must generalize in a proper way from a training data set, discovering the actual signal in data and ignoring the noise of contained in them, we made the following decissions:
+
+1. All of the columns that had NA values were removed.
+2. There were some columns that seemed to be metadata. We decided to remove those columns since any relationship that a model could find with those data, would not be important and would make the model to be overfitted and perform badly. Those columns that were removed are: `row index`, `user_name`, `raw_timestamp_part_1`, `raw_timestamp_part_2`, `cvtd_timestamp`, `new_window`, `num_window`.
+A summary of the final processed data can be seen in the figure of below:
+
+```{r preprocess_data,echo=FALSE,results='hide'}
+processData <- function(df){
+        na.columns <- NULL
+        for(i in 1:ncol(df)){
+                nas <- any(is.na(df[,i]))
+                if(nas)
+                        na.columns <- c(na.columns,i)
+        }
+        na.columns
+}
+
+processed.data<-data[,-processData(data)]
+extraCols <- which(names(processed.data) %in% c("X","user_name", "raw_timestamp_part_1", 
+                                       "raw_timestamp_part_2", "cvtd_timestamp", 
+                                       "new_window", "num_window"))
+processed.data<-processed.data[,-extraCols]
+classeIndex <- ncol(processed.data)
+```
+```{r}
+str(processed.data)
+```
+
+## Cross Validation
+
+In order to perform a good Cross validation phase, we split the already processed data in two independent sets: a training set and a test set. Below, we can see the associated code for making such partition:
+
+```{r cross_validation}
+set.seed(98765)
+
+in.train <- createDataPartition(processed.data$classe, p=.60, list=FALSE)
+train <- processed.data[in.train[,1],]
+dim(train)
+test <- processed.data[-in.train[,1],]
+dim(test)
+```
+
+The partition was done according to the `classe` variable so as to ensure the training set and test set have examples of each one, with the same proportion than in the original set. 60% of the original data was allocated to the train set and the rest was the validation set.
+
+## Prediction
+
+Firstly, we decided to train a random forest with all the features of the train set, apart from the classe variable.
+
+```{r train, cache=TRUE}
+set.seed(12345)
+model.rf <- train(y=as.factor(train$classe), x=train[,-classeIndex], tuneGrid=data.frame(mtry=3), trControl=trainControl(method="cv"), method="parRF")
+```
+After we had our random forest model, we measured its accuracy in both the training and the test sets:
+
+```{r confusion_matrix}
+trainCM <- confusionMatrix(predict(model.rf, newdata=train[,-classeIndex]), factor(train$classe))
+trainCM
+testCM <- confusionMatrix(predict(model.rf, newdata=test[,-classeIndex]), factor(test$classe))
+testCM
+```
+
+We can see how, for the train set the accuracy is 100%, having a perfect prediction for that set. Since we know that the accuracy of the training set is very optimistic, we then use the validation set in order to check the accuraccy in an independent set. We can see how we also get a high value for accuracy for the test set, very close to 100%. Besides, we can see, for the test set, a Kappa-statistic of `r testCM$overall["Kappa"]`.
+Therefore, from this perform executed in the test sample data, we expect to have a very good prediction for any new observation that we may have. In other words, the accuracy that we get, as weel as the prediction rates, sensitivity, specifity and the kappa-statistic are estimators for us, that make us think that we are very close to a perfect prediction model for activity quality from activity monitors.
+### example of decision tree used by the random forest
+
+As we already know, a random forest consist of a set of decision trees that vote, in group, in order to predict the outcome of a new observation. Here we show an example of decision tree that could be used by our random forest model:
+
+```{r decision_tree, echo=FALSE,cache=TRUE}
+set.seed(12345)
+d.tree <- train(y=as.factor(train$classe), x=train[,-classeIndex], trControl=trainControl(method="cv"), method="rpart")
+fancyRpartPlot(d.tree$finalModel)
+```
+
+This simple decision tree does not perform a good prediction by itself. However, if we configure a battery of decision trees, similar to this ones, but trained in different ways, after a overall vote, the result becomes better. In our case we obtain a result very close to 100% of accuracy when we provide a forest of 252 trees that vote the final decision.
+
+### Variable Importance
+Regarding to the importance of each variable in the final model, we can see the ranking associated with the model in the following figure:
+
+```{r variable_importance, echo=F}
+print(plot(varImp(model.rf, scale = FALSE)))
+```
+
+## Conclusion
+
+After completing the whole model preprocessing of data, cross validation and model training we can see that we get a very good results for both train and test sets when we choose a random forest algorithm as predicting model. This model performs greatly the prediction of activities from accelerometers measurements and, according the the obtained results, it is capable of reading very well the signal from data, ignoring the possible noise that thay may have. 
